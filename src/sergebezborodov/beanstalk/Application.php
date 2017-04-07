@@ -10,6 +10,9 @@ use yii\helpers\Console;
  */
 class Application extends \yii\console\Application
 {
+    const EVENT_BEFORE_JOB = 'beforeJob';
+    const EVENT_AFTER_JOB = 'afterJob';
+
     const EXIT_PARAM = '--exit-after-complete';
 
     public $enableCoreCommands = false;
@@ -78,8 +81,8 @@ class Application extends \yii\console\Application
                 $exitAfterComplete = true;
                 unset($params[$pos]);
             }
-            $tubes = $params;
 
+            $tubes = $params;
             if ($tubes) {
                 \Yii::info(
                     "Start to listen custom tubes.\n " . json_encode($tubes, JSON_UNESCAPED_UNICODE),
@@ -97,7 +100,6 @@ class Application extends \yii\console\Application
                 );
                 $tubes = $beanstalk->listTubes();
             }
-
             $onlyOneTube = count($tubes) == 1;
             $tube = reset($tubes);
             $route = $router->getRoute($tube);
@@ -105,8 +107,9 @@ class Application extends \yii\console\Application
             while (true) {
                 $this->unregisterSignalHandler();
                 $job = $beanstalk->reserve();
-                \Yii::info("Reserve job.\n " . json_encode($job, JSON_UNESCAPED_UNICODE), 'grnrbt\beanstalk');
                 $this->registerSignalHandler();
+                \Yii::info("Reserve job.\n " . json_encode($job, JSON_UNESCAPED_UNICODE), 'grnrbt\beanstalk');
+                $this->trigger(static::EVENT_BEFORE_JOB, new JobEvent($job));
 
                 if (!$onlyOneTube) {
                     $info = $beanstalk->statsJob($job['id']);
@@ -116,7 +119,6 @@ class Application extends \yii\console\Application
 
                 try {
                     $this->_isWorkingNow = true;
-
                     $actResp = $this->runAction($route, [$job['body'], $job['id']]);
                     \Yii::info(
                         "Run action.\n " . json_encode(['route' => $route, 'result' => $actResp], JSON_UNESCAPED_UNICODE),
@@ -129,8 +131,9 @@ class Application extends \yii\console\Application
                         $beanstalk->bury($job['id'], 0);
                         \Yii::info("Bury job.\n " . json_encode($job, JSON_UNESCAPED_UNICODE), 'grnrbt\beanstalk');
                     }
-                    $this->_isWorkingNow = false;
+                    $this->trigger(static::EVENT_AFTER_JOB, new JobEvent($job));
 
+                    $this->_isWorkingNow = false;
                     $this->signalDispatch();
                     if ($this->_needTerminate || $exitAfterComplete) {
                         \Yii::info('Stop working.', 'grnrbt\beanstalk');
@@ -141,6 +144,7 @@ class Application extends \yii\console\Application
                     fwrite(STDERR, Console::ansiFormat($e."\n", [Console::FG_RED]));
                     $beanstalk->bury($job['id'], 0);
                     \Yii::info("Bury job.\n " . json_encode($job, JSON_UNESCAPED_UNICODE), 'grnrbt\beanstalk');
+                    $this->trigger(static::EVENT_AFTER_JOB, new JobEvent($job));
 
                     if ($e instanceof \yii\db\Exception && $this->exitOnDbException) {
                         $this->_needTerminate = true;
