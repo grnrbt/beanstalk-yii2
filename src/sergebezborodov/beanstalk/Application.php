@@ -66,10 +66,13 @@ class Application extends \yii\console\Application
         $beanstalk = $this->get('beanstalk');
         /** @var Router $router */
         $router = $this->get('router');
-
+        \Yii::info(
+            "Start working.\n " . json_encode(['params' => $request->getParams()], JSON_UNESCAPED_UNICODE),
+            'grnrbt\beanstalk'
+        );
+        
         $exitAfterComplete = false;
         try {
-
             $params = $request->getParams();
             if ($pos = array_search(self::EXIT_PARAM, $params)) {
                 $exitAfterComplete = true;
@@ -78,12 +81,20 @@ class Application extends \yii\console\Application
             $tubes = $params;
 
             if ($tubes) {
+                \Yii::info(
+                    "Start to listen custom tubes.\n " . json_encode($tubes, JSON_UNESCAPED_UNICODE),
+                    'grnrbt\beanstalk'
+                );
                 foreach ($tubes as $tube) {
                     if (!$beanstalk->watch($tube)) {
                         throw new Exception("Unable to watch {$tube}");
                     }
                 }
             } else {
+                \Yii::info(
+                    "Start to listen default tubes.\n " . json_encode($tubes, JSON_UNESCAPED_UNICODE),
+                    'grnrbt\beanstalk'
+                );
                 $tubes = $beanstalk->listTubes();
             }
 
@@ -94,6 +105,7 @@ class Application extends \yii\console\Application
             while (true) {
                 $this->unregisterSignalHandler();
                 $job = $beanstalk->reserve();
+                \Yii::info("Reserve job.\n " . json_encode($job, JSON_UNESCAPED_UNICODE), 'grnrbt\beanstalk');
                 $this->registerSignalHandler();
 
                 if (!$onlyOneTube) {
@@ -106,20 +118,29 @@ class Application extends \yii\console\Application
                     $this->_isWorkingNow = true;
 
                     $actResp = $this->runAction($route, [$job['body'], $job['id']]);
+                    \Yii::info(
+                        "Run action.\n " . json_encode(['route' => $route, 'result' => $actResp], JSON_UNESCAPED_UNICODE),
+                        'grnrbt\beanstalk'
+                    );
                     if ($actResp) {
                         $beanstalk->delete($job['id']);
+                        \Yii::info("Delete job.\n " . json_encode($job, JSON_UNESCAPED_UNICODE), 'grnrbt\beanstalk');
                     } else {
                         $beanstalk->bury($job['id'], 0);
+                        \Yii::info("Bury job.\n " . json_encode($job, JSON_UNESCAPED_UNICODE), 'grnrbt\beanstalk');
                     }
                     $this->_isWorkingNow = false;
 
                     $this->signalDispatch();
                     if ($this->_needTerminate || $exitAfterComplete) {
+                        \Yii::info('Stop working.', 'grnrbt\beanstalk');
                         $this->endApp();
                     }
                 } catch (\Exception $e) {
+                    \Yii::error("Exception. Message: {$e->getMessage()}.", 'grnrbt\beanstalk');
                     fwrite(STDERR, Console::ansiFormat($e."\n", [Console::FG_RED]));
                     $beanstalk->bury($job['id'], 0);
+                    \Yii::info("Bury job.\n " . json_encode($job, JSON_UNESCAPED_UNICODE), 'grnrbt\beanstalk');
 
                     if ($e instanceof \yii\db\Exception && $this->exitOnDbException) {
                         $this->_needTerminate = true;
@@ -127,11 +148,13 @@ class Application extends \yii\console\Application
 
                     $this->_isWorkingNow = false;
                     if ($this->_needTerminate) {
+                        \Yii::info("Stop working.", 'grnrbt\beanstalk');
                         $this->endApp();
                     }
                 }
             }
         } catch (\Exception $e) {
+            \Yii::error("Exception. Message: {$e->getMessage()}.", 'grnrbt\beanstalk');
             $response->exitStatus = 1;
             fwrite(STDERR, Console::ansiFormat($e."\n", [Console::FG_RED]));
         }
